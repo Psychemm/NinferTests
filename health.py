@@ -5,7 +5,7 @@ Runpod polls GET /ping on PORT_HEALTH: 200 = healthy, 204 = still initializing, 
 ninfer-serve exposes /health (200 when the engine accepts work, 503 after an engine failure) but not /ping,
 and it is not listening at all while the model downloads/loads. This shim maps:
   connection refused / timeout  -> 204 (initializing)
-  ninfer /health 200            -> 200
+  ninfer /health 200            -> 200 OK
   ninfer /health other status   -> that status (unhealthy)
 Usage: health.py <health_port> <app_port>
 """
@@ -30,6 +30,17 @@ def upstream_status() -> int:
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/ping":            # GET /ping -> 200 OK once ninfer-serve is ready
+            self.ping()
+        elif path == "/health":        # same semantics under ninfer's own route name
+            self.ping()
+        else:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+    def ping(self):
         code = upstream_status()
         self.send_response(code)
         if code == 200:
@@ -46,4 +57,5 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
-ThreadingHTTPServer(("0.0.0.0", HEALTH_PORT), Handler).serve_forever()
+if __name__ == "__main__":
+    ThreadingHTTPServer(("0.0.0.0", HEALTH_PORT), Handler).serve_forever()
