@@ -1,0 +1,22 @@
+{
+  "name": "lms-plugin-runpod-ninfer",
+  "version": "1.0.0",
+  "description": "Bionic / LM Studio generator plugin for the NInfer Qwen3.8-27B endpoint on Runpod Serverless",
+  "main": "index.js",
+  "scripts": {
+    "dev": "lms dev",
+    "install-plugin": "lms dev --install -y",
+    "push": "lms push"
+  },
+  "author": "psychem",
+  "license": "ISC",
+  "dependencies": {
+    "@lmstudio/sdk": "1.4.0",
+    "openai": "^5.2.0",
+    "zod": "3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.8",
+    "typescript": "^5.9.3"
+  }
+}
