@@ -12,6 +12,7 @@ MODEL_REVISION="${MODEL_REVISION:-main}"
 MODEL_BYTES="${MODEL_BYTES:-23719496192}"
 MODEL_SHA256="${MODEL_SHA256:-552c374c685dce302603b95fbe940fb04243c0cd44c083efc644ad3d980d462c}"
 VERIFY_SHA256="${VERIFY_SHA256:-0}"   # 1 = always run the full sha256 check (slow on 22 GiB); a fresh download is always checked.
+DOWNLOAD_CONNECTIONS="${DOWNLOAD_CONNECTIONS:-16}"
 
 # Model location: a network volume when one is mounted (survives cold starts), else the container disk.
 if [ -z "${MODEL_DIR:-}" ]; then
@@ -22,21 +23,31 @@ MODEL_PATH="$MODEL_DIR/$MODEL_FILE"
 
 log() { printf '%s  start.sh  %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >&2; }
 
-# 1. Health shim: the load balancer polls GET /ping on PORT_HEALTH. The shim answers 204 (initializing)
-#    until ninfer-serve's own /health returns 200, so the worker is never marked unhealthy while loading.
+# 1. Health shim: answers 200 on /ping from the start so the load balancer does not kill the
+#    worker during a long download (it terminates workers that are unhealthy for ~8 min).
 python3 /health.py "$PORT_HEALTH" "$PORT" &
 log "health shim listening on :$PORT_HEALTH, probing ninfer-serve on :$PORT"
 
 # 2. Model artifact (single file from Hugging Face; resumable; size-checked, sha256-checked when fresh).
 url="https://huggingface.co/${MODEL_REPO}/resolve/${MODEL_REVISION}/${MODEL_FILE}"
-auth=()
-if [ -n "${HF_TOKEN:-}" ]; then auth=(-H "Authorization: Bearer ${HF_TOKEN}"); fi
 have_bytes() { stat -c %s "$MODEL_PATH" 2>/dev/null || echo 0; }
 
 if [ "$(have_bytes)" != "$MODEL_BYTES" ]; then
-  log "downloading ${MODEL_REPO}/${MODEL_FILE} (${MODEL_BYTES} bytes) -> ${MODEL_PATH}"
+  log "downloading ${MODEL_REPO}/${MODEL_FILE} (${MODEL_BYTES} bytes) -> ${MODEL_PATH} with ${DOWNLOAD_CONNECTIONS} connections"
   t0=$(date +%s)
-  curl -fL --retry 5 --retry-delay 5 --retry-all-errors -C - "${auth[@]}" -o "$MODEL_PATH" "$url"
+  if command -v aria2c >/dev/null 2>&1; then
+    aria_auth=()
+    if [ -n "${HF_TOKEN:-}" ]; then aria_auth=(--header="Authorization: Bearer ${HF_TOKEN}"); fi
+    rm -f "$MODEL_PATH" "$MODEL_PATH.aria2"
+    aria2c --continue=true --max-connection-per-server="$DOWNLOAD_CONNECTIONS" --split="$DOWNLOAD_CONNECTIONS" \
+      --min-split-size=8M --file-allocation=none --auto-file-renaming=false --allow-overwrite=true \
+      --summary-interval=30 --console-log-level=warn --retry-wait=5 --max-tries=10 \
+      "${aria_auth[@]}" -d "$MODEL_DIR" -o "$MODEL_FILE" "$url"
+  else
+    curl_auth=()
+    if [ -n "${HF_TOKEN:-}" ]; then curl_auth=(-H "Authorization: Bearer ${HF_TOKEN}"); fi
+    curl -fL --retry 5 --retry-delay 5 --retry-all-errors -C - "${curl_auth[@]}" -o "$MODEL_PATH" "$url"
+  fi
   log "download finished in $(( $(date +%s) - t0 ))s"
   if [ "$(have_bytes)" != "$MODEL_BYTES" ]; then
     log "ERROR: size mismatch after download: $(have_bytes) != ${MODEL_BYTES}"
